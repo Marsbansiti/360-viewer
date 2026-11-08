@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>360° Viewer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    canvas#viewer { display: block; width: 100%; height: 100%; cursor: grab; }
+    canvas#viewer.grabbing { cursor: grabbing; }
+
+    .overlay {
+      position: absolute;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .overlay > * { pointer-events: auto; }
+
+    .control-btn {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .control-btn:hover { transform: scale(1.08); }
+    .control-btn:active { transform: scale(0.95); }
+
+    .toast {
+      position: absolute;
+      bottom: 80px; left: 50%; transform: translateX(-50%);
+      padding: 10px 20px;
+      border-radius: 12px;
+      font-size: 14px;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+      pointer-events: none;
+      z-index: 20;
+      backdrop-filter: blur(12px);
+    }
+    .toast.show { opacity: 1; }
+
+    /* ─── Welcome Upload Panel ──────────────────────────── */
+    #uploadPanel {
+      position: absolute; inset: 0;
+      display: flex;
+      align-items: center; justify-content: center;
+      z-index: 25;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+      transition: opacity 0.5s ease, visibility 0.5s ease;
+    }
+    #uploadPanel.hidden-panel {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .upload-card {
+      width: 520px;
+      max-width: 90vw;
+      border-radius: 20px;
+      overflow: hidden;
+      animation: cardIn 0.5s ease forwards;
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(24px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .drop-area {
+      border: 2px dashed rgba(255,255,255,0.25);
+      border-radius: 16px;
+      transition: all 0.3s ease;
+      cursor: pointer;
+      position: relative;
+    }
+    .drop-area:hover, .drop-area.drag-over {
+      border-color: rgba(120, 160, 255, 0.7);
+      background: rgba(120, 160, 255, 0.08);
+    }
+    .drop-area.drag-over {
+      animation: borderPulse 1.5s ease infinite;
+    }
+    @keyframes borderPulse {
+      0%, 100% { border-color: rgba(120, 160, 255, 0.4); }
+      50% { border-color: rgba(120, 160, 255, 0.9); }
+    }
+
+    .browse-btn {
+      padding: 10px 28px;
+      border-radius: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: none;
+      font-size: 14px;
+    }
+    .browse-btn:hover { transform: translateY(-1px); filter: brightness(1.15); }
+    .browse-btn:active { transform: translateY(0); }
+
+    /* ─── Full-page drag-drop overlay ──────────────────── */
+    #dropzone {
+      position: absolute; inset: 0;
+      display: none;
+      align-items: center; justify-content: center;
+      z-index: 30;
+      backdrop-filter: blur(10px);
+      background: rgba(0,0,0,0.6);
+      transition: opacity 0.3s ease;
+    }
+    #dropzone.active { display: flex; }
+
+    .dropzone-inner {
+      border: 3px dashed rgba(120, 160, 255, 0.6);
+      border-radius: 24px;
+      padding: 60px 80px;
+      text-align: center;
+      animation: dropzoneIn 0.3s ease forwards, borderPulse 1.5s ease infinite;
+    }
+    @keyframes dropzoneIn {
+      from { opacity: 0; transform: scale(0.9); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .info-badge {
+      padding: 4px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      backdrop-filter: blur(12px);
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-in { animation: fadeInUp 0.5s ease forwards; }
+
+    /* Loading spinner */
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid rgba(255,255,255,0.2);
+      border-top-color: rgba(120, 160, 255, 0.9);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Image info bar */
+    #imageInfo {
+      transition: opacity 0.3s ease;
+    }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased">
+
+  <canvas id="viewer"></canvas>
+
+  <!-- ═══ Welcome Upload Panel ═══ -->
+  <div id="uploadPanel">
+    <div class="upload-card bg-[#1a1d2e]/95 border border-white/10 shadow-2xl">
+      <!-- Header -->
+      <div class="px-8 pt-7 pb-2">
+        <div class="flex items-center gap-3 mb-1">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-white text-lg font-bold">360° Panorama Viewer</h2>
+            <p class="text-white/50 text-sm">Upload an equirectangular image to explore in 360°</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Drop Area -->
+      <div class="px-8 pb-3">
+        <div id="panelDropArea" class="drop-area p-8 text-center" onclick="document.getElementById('panelFileInput').click()">
+          <input type="file" id="panelFileInput" accept="image/*" class="hidden">
+          
+          <!-- Default state -->
+          <div id="dropDefault">
+            <div class="mx-auto mb-4 w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+            </div>
+            <p class="text-white/80 font-semibold mb-1">Drag & drop your 360° image here</p>
+            <p class="text-white/40 text-sm mb-5">or click to browse files</p>
+            <button class="browse-btn bg-gradient-to-r from-blue-500 to-purple-600 text-white" onclick="event.stopPropagation(); document.getElementById('panelFileInput').click()">
+              Browse Files
+            </button>
+            <p class="text-white/30 text-xs mt-4">Supports JPG, PNG, WebP · Equirectangular (2:1 ratio) recommended</p>
+          </div>
+
+          <!-- Loading state -->
+          <div id="dropLoading" class="hidden">
+            <div class="spinner mx-auto mb-3"></div>
+            <p class="text-white/70 text-sm">Processing image...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Demo / Samples -->
+      <div class="px-8 pb-6 pt-3 border-t border-white/5 flex flex-wrap items-center justify-between gap-2">
+        <p class="text-white/40 text-xs">Explore with samples:</p>
+        <div class="flex items-center gap-2">
+          <button id="sampleBtn" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 border border-blue-500/30 transition-all cursor-pointer">
+            Sample Room (360°)
+          </button>
+          <button id="skipBtn" class="px-3 py-1.5 rounded-lg text-xs font-medium text-white/60 hover:text-white hover:bg-white/5 transition-all cursor-pointer bg-transparent border border-white/10">
+            Twilight Sky (Demo)
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Top bar (viewer controls) ═══ -->
+  <div id="topBar" class="overlay top-0 left-0 right-0 flex items-center justify-between p-4" style="opacity:0; transition: opacity 0.4s ease;">
+    <div class="flex items-center gap-3">
+      <div class="info-badge bg-black/40 text-white font-semibold flex items-center gap-2">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/>
+        </svg>
+        360° Viewer
+      </div>
+      <div id="fovBadge" class="info-badge bg-black/30 text-white/80 font-mono text-xs">
+        FOV 75°
+      </div>
+      <div id="imageInfo" class="info-badge bg-black/30 text-white/60 text-xs" style="opacity:0;">
+        <span id="imageInfoText"></span>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="control-btn bg-black/40 text-white hover:bg-black/60" title="Upload 360° image">
+        <input type="file" id="fileInput" accept="image/*" class="hidden">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </label>
+      <button id="resetBtn" class="control-btn bg-black/40 text-white hover:bg-black/60" title="Reset view (R)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="1 4 1 10 7 10"/>
+          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+        </svg>
+      </button>
+      <button id="newImageBtn" class="control-btn bg-black/40 text-white hover:bg-black/60" title="Load new image">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <line x1="12" y1="8" x2="12" y2="16"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+        </svg>
+      </button>
+      <button id="fullscreenBtn" class="control-btn bg-black/40 text-white hover:bg-black/60" title="Fullscreen (F)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 3 21 3 21 9"/>
+          <polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/>
+          <line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══ Bottom bar ═══ -->
+  <div id="bottomBar" class="overlay bottom-0 left-0 right-0 flex items-center justify-center p-4" style="opacity:0; transition: opacity 0.4s ease;">
+    <div id="hint" class="info-badge bg-black/40 text-white/70 text-xs animate-in">
+      Drag to look around · Scroll to zoom · Drop an image to load a new panorama
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast bg-black/50 text-white"></div>
+
+  <!-- ═══ Full-page drag-drop overlay (when viewer is active) ═══ -->
+  <div id="dropzone">
+    <div class="dropzone-inner">
+      <svg class="mx-auto mb-4" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="rgba(120,160,255,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <p class="text-white text-xl font-bold mb-1">Drop your 360° image</p>
+      <p class="text-white/50 text-sm">Release to load the panorama</p>
+    </div>
+  </div>
+
+  <script>
+    // ─── WebGL 360° Panorama Viewer ───────────────────────────────────
+    const canvas = document.getElementById('viewer');
+    const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+
+    if (!gl) {
+      document.body.innerHTML = '<div class="flex items-center justify-center h-screen text-xl text-red-400">WebGL is not supported in this browser.</div>';
+      throw new Error('WebGL not supported');
+    }
+
+    // ─── Shader sources ──────────────────────────────────────────────
+    const vertSrc = `
+      attribute vec2 a_pos;
+      varying vec2 v_uv;
+      void main() {
+        v_uv = a_pos * 0.5 + 0.5;
+        gl_Position = vec4(a_pos, 0.0, 1.0);
+      }
+    `;
+
+    const fragSrc = `
+      precision highp float;
+      varying vec2 v_uv;
+      uniform sampler2D u_tex;
+      uniform float u_yaw;
+      uniform float u_pitch;
+      uniform float u_fov;
+      uniform float u_aspect;
+
+      #define PI 3.14159265359
+
+      void main() {
+        vec2 ndc = (v_uv - 0.5) * 2.0;
+        float halfFov = u_fov * 0.5;
+        float tanHalf = tan(halfFov);
+        vec3 dir = normalize(vec3(ndc.x * tanHalf * u_aspect, ndc.y * tanHalf, -1.0));
+
+        float cp = cos(u_pitch), sp = sin(u_pitch);
+        dir = vec3(dir.x, cp * dir.y - sp * dir.z, sp * dir.y + cp * dir.z);
+
+        float cy = cos(u_yaw), sy = sin(u_yaw);
+        dir = vec3(cy * dir.x + sy * dir.z, dir.y, -sy * dir.x + cy * dir.z);
+
+        float lon = atan(dir.x, -dir.z);
+        float lat = asin(clamp(dir.y, -1.0, 1.0));
+        vec2 texUV = vec2(lon / (2.0 * PI) + 0.5, lat / PI + 0.5);
+
+        gl_FragColor = texture2D(u_tex, texUV);
+      }
+    `;
+
+    // ─── Compile shaders ─────────────────────────────────────────────
+    function compileShader(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
+    }
+
+    const vs = compileShader(gl.VERTEX_SHADER, vertSrc);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fragSrc);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.useProgram(prog);
+
+    const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(prog, 'a_pos');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    const uTex = gl.getUniformLocation(prog, 'u_tex');
+    const uYaw = gl.getUniformLocation(prog, 'u_yaw');
+    const uPitch = gl.getUniformLocation(prog, 'u_pitch');
+    const uFov = gl.getUniformLocation(prog, 'u_fov');
+    const uAspect = gl.getUniformLocation(prog, 'u_aspect');
+
+    // ─── State ───────────────────────────────────────────────────────
+    let yaw = 0, pitch = 0;
+    let fov = 75 * Math.PI / 180;
+    const minFov = 30 * Math.PI / 180;
+    const maxFov = 120 * Math.PI / 180;
+    let velYaw = 0, velPitch = 0;
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    let autoRotate = true;
+    let texture = null;
+    let textureReady = false;
+    let panelVisible = true;
+    let currentFileName = '';
+
+    // ─── Generate demo panorama ──────────────────────────────────────
+    function generateDemoPanorama() {
+      const w = 2048, h = 1024;
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, h * 0.55);
+      skyGrad.addColorStop(0, '#0a0e27');
+      skyGrad.addColorStop(0.3, '#1a1a4e');
+      skyGrad.addColorStop(0.6, '#2d1b69');
+      skyGrad.addColorStop(1, '#ff6b35');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0, 0, w, h * 0.55);
+
+      const horizonGrad = ctx.createLinearGradient(0, h * 0.42, 0, h * 0.58);
+      horizonGrad.addColorStop(0, 'transparent');
+      horizonGrad.addColorStop(0.4, 'rgba(255, 140, 50, 0.4)');
+      horizonGrad.addColorStop(0.5, 'rgba(255, 200, 80, 0.6)');
+      horizonGrad.addColorStop(0.6, 'rgba(255, 140, 50, 0.4)');
+      horizonGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = horizonGrad;
+      ctx.fillRect(0, h * 0.42, w, h * 0.16);
+
+      const rng = (s) => { let x = Math.sin(s) * 43758.5453; return x - Math.floor(x); };
+      for (let i = 0; i < 800; i++) {
+        const sx = rng(i * 7.1) * w;
+        const sy = rng(i * 13.3) * h * 0.45;
+        const sr = rng(i * 3.7) * 1.8 + 0.3;
+        const brightness = rng(i * 19.1);
+        ctx.beginPath();
+        ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + brightness * 0.7})`;
+        ctx.fill();
+      }
+
+      ctx.beginPath();
+      ctx.arc(w * 0.15, h * 0.18, 35, 0, Math.PI * 2);
+      const moonGrad = ctx.createRadialGradient(w * 0.15, h * 0.18, 0, w * 0.15, h * 0.18, 35);
+      moonGrad.addColorStop(0, '#fffde0');
+      moonGrad.addColorStop(0.7, '#fff5c0');
+      moonGrad.addColorStop(1, 'rgba(255,245,192,0)');
+      ctx.fillStyle = moonGrad;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(w * 0.15, h * 0.18, 80, 0, Math.PI * 2);
+      const moonGlow = ctx.createRadialGradient(w * 0.15, h * 0.18, 20, w * 0.15, h * 0.18, 80);
+      moonGlow.addColorStop(0, 'rgba(255, 245, 200, 0.15)');
+      moonGlow.addColorStop(1, 'rgba(255, 245, 200, 0)');
+      ctx.fillStyle = moonGlow;
+      ctx.fill();
+
+      const groundGrad = ctx.createLinearGradient(0, h * 0.5, 0, h);
+      groundGrad.addColorStop(0, '#1a1a2e');
+      groundGrad.addColorStop(0.3, '#16213e');
+      groundGrad.addColorStop(1, '#0f0f23');
+      ctx.fillStyle = groundGrad;
+      ctx.fillRect(0, h * 0.5, w, h * 0.5);
+
+      ctx.strokeStyle = 'rgba(100, 120, 255, 0.08)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 20; i++) {
+        const gy = h * 0.5 + (i / 20) * h * 0.5;
+        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+      }
+      for (let i = 0; i < 40; i++) {
+        const gx = (i / 40) * w;
+        ctx.beginPath(); ctx.moveTo(gx, h * 0.5); ctx.lineTo(gx + (gx - w/2) * 0.5, h); ctx.stroke();
+      }
+
+      ctx.fillStyle = '#0d0d1a';
+      ctx.beginPath();
+      ctx.moveTo(0, h * 0.52);
+      for (let x = 0; x <= w; x += 3) {
+        const n1 = Math.sin(x * 0.005) * 25;
+        const n2 = Math.sin(x * 0.013 + 1) * 15;
+        const n3 = Math.sin(x * 0.031 + 2) * 8;
+        const building = (Math.sin(x * 0.1) > 0.7) ? -rng(Math.floor(x * 0.03)) * 40 : 0;
+        ctx.lineTo(x, h * 0.52 + n1 + n2 + n3 + building);
+      }
+      ctx.lineTo(w, h * 0.55); ctx.lineTo(0, h * 0.55); ctx.closePath(); ctx.fill();
+
+      for (let i = 0; i < 150; i++) {
+        const wx = rng(i * 17.3) * w;
+        const wy = h * 0.48 + rng(i * 23.1) * h * 0.06;
+        const ww = 2 + rng(i * 7.7) * 3;
+        const wh = 2 + rng(i * 11.3) * 2;
+        const brightness = rng(i * 31.7);
+        if (brightness > 0.4) {
+          ctx.fillStyle = `rgba(255, ${200 + rng(i*5)*55}, ${100 + rng(i*9)*100}, ${0.3 + brightness * 0.5})`;
+          ctx.fillRect(wx, wy, ww, wh);
+        }
+      }
+
+      for (let a = 0; a < 3; a++) {
+        ctx.beginPath();
+        const ay = h * 0.15 + a * h * 0.08;
+        ctx.moveTo(w * 0.3 + a * 200, ay);
+        ctx.bezierCurveTo(w * 0.4 + a * 100, ay - 40, w * 0.6 - a * 50, ay + 30, w * 0.75 + a * 50, ay - 10);
+        ctx.strokeStyle = `rgba(${80 + a * 60}, ${150 + a * 30}, 255, 0.15)`;
+        ctx.lineWidth = 20 + a * 10;
+        ctx.stroke();
+      }
+
+      return c;
+    }
+
+    // ─── Texture management ──────────────────────────────────────────
+    function createTexture() {
+      texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    }
+
+    function uploadTexture(source) {
+      if (!texture) createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      textureReady = true;
+    }
+
+    function loadImageAsTexture(src, fileName) {
+      if (src instanceof HTMLCanvasElement) {
+        uploadTexture(src);
+        return;
+      }
+      showLoading(true);
+      const img = new Image();
+      img.onload = () => {
+        uploadTexture(img);
+        showLoading(false);
+        hideUploadPanel();
+        showToast(`✓ Panorama loaded — ${img.naturalWidth} × ${img.naturalHeight}`);
+        setImageInfo(fileName || 'Custom image', img.naturalWidth, img.naturalHeight);
+        resetView();
+      };
+      img.onerror = () => {
+        showLoading(false);
+        showToast('✕ Failed to load image');
+      };
+      img.src = src;
+    }
+
+    // ─── Resize ──────────────────────────────────────────────────────
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = canvas.clientWidth * dpr;
+      canvas.height = canvas.clientHeight * dpr;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ─── Input: Mouse ────────────────────────────────────────────────
+    canvas.addEventListener('mousedown', (e) => {
+      if (panelVisible) return;
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      velYaw = 0; velPitch = 0;
+      autoRotate = false;
+      canvas.classList.add('grabbing');
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      const sensitivity = fov / canvas.clientWidth;
+      yaw -= dx * sensitivity;
+      pitch += dy * sensitivity;
+      pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+      velYaw = -dx * sensitivity;
+      velPitch = dy * sensitivity;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    window.addEventListener('mouseup', () => {
+      isDragging = false;
+      canvas.classList.remove('grabbing');
+    });
+
+    // ─── Input: Touch ────────────────────────────────────────────────
+    let touchDist = 0;
+    canvas.addEventListener('touchstart', (e) => {
+      if (panelVisible) return;
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        isDragging = true;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+        velYaw = 0; velPitch = 0;
+        autoRotate = false;
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        touchDist = Math.sqrt(dx*dx + dy*dy);
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (panelVisible) return;
+      e.preventDefault();
+      if (e.touches.length === 1 && isDragging) {
+        const dx = e.touches[0].clientX - lastX;
+        const dy = e.touches[0].clientY - lastY;
+        const sensitivity = fov / canvas.clientWidth;
+        yaw -= dx * sensitivity;
+        pitch += dy * sensitivity;
+        pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+        velYaw = -dx * sensitivity;
+        velPitch = dy * sensitivity;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const d = Math.sqrt(dx*dx + dy*dy);
+        if (touchDist > 0) {
+          fov *= touchDist / d;
+          fov = Math.max(minFov, Math.min(maxFov, fov));
+          updateFovBadge();
+        }
+        touchDist = d;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length === 0) isDragging = false;
+      touchDist = 0;
+    });
+
+    // ─── Input: Scroll ───────────────────────────────────────────────
+    canvas.addEventListener('wheel', (e) => {
+      if (panelVisible) return;
+      e.preventDefault();
+      fov += e.deltaY * 0.001;
+      fov = Math.max(minFov, Math.min(maxFov, fov));
+      updateFovBadge();
+    }, { passive: false });
+
+    // ─── Input: Keyboard ─────────────────────────────────────────────
+    window.addEventListener('keydown', (e) => {
+      if (panelVisible) return;
+      const speed = 0.03;
+      switch(e.key) {
+        case 'ArrowLeft': case 'a': yaw += speed; autoRotate = false; break;
+        case 'ArrowRight': case 'd': yaw -= speed; autoRotate = false; break;
+        case 'ArrowUp': case 'w': pitch += speed; autoRotate = false; break;
+        case 'ArrowDown': case 's': pitch -= speed; autoRotate = false; break;
+        case '+': case '=': fov = Math.max(minFov, fov - 0.05); updateFovBadge(); break;
+        case '-': fov = Math.min(maxFov, fov + 0.05); updateFovBadge(); break;
+        case 'r': resetView(); break;
+        case 'f': toggleFullscreen(); break;
+      }
+      pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+    });
+
+    // ─── File handling ───────────────────────────────────────────────
+    const fileInput = document.getElementById('fileInput');
+    const panelFileInput = document.getElementById('panelFileInput');
+    const dropzone = document.getElementById('dropzone');
+    const uploadPanel = document.getElementById('uploadPanel');
+    const panelDropArea = document.getElementById('panelDropArea');
+
+    function loadFile(file) {
+      currentFileName = file.name;
+      const reader = new FileReader();
+      reader.onload = (e) => loadImageAsTexture(e.target.result, file.name);
+      reader.readAsDataURL(file);
+    }
+
+    // Panel file input
+    panelFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) loadFile(file);
+    });
+
+    // Toolbar file input
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) loadFile(file);
+    });
+
+    // ─── Panel drop area ─────────────────────────────────────────────
+    panelDropArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      panelDropArea.classList.add('drag-over');
+    });
+    panelDropArea.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      panelDropArea.classList.remove('drag-over');
+    });
+    panelDropArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      panelDropArea.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) loadFile(file);
+    });
+
+    // ─── Full-page drag-drop (when viewer is active) ─────────────────
+    let dragCounter = 0;
+    document.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      if (!panelVisible) {
+        dropzone.classList.add('active');
+      }
+    });
+    document.addEventListener('dragover', (e) => {
+      e.preventDefault();
+    });
+    document.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        dropzone.classList.remove('active');
+      }
+    });
+    document.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      dropzone.classList.remove('active');
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) loadFile(file);
+    });
+
+    // ─── UI helpers ──────────────────────────────────────────────────
+    function updateFovBadge() {
+      document.getElementById('fovBadge').textContent = `FOV ${Math.round(fov * 180 / Math.PI)}°`;
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function showLoading(show) {
+      document.getElementById('dropDefault').style.display = show ? 'none' : 'block';
+      document.getElementById('dropLoading').style.display = show ? 'block' : 'none';
+    }
+
+    function setImageInfo(name, w, h) {
+      const el = document.getElementById('imageInfo');
+      document.getElementById('imageInfoText').textContent = `${name} · ${w}×${h}`;
+      el.style.opacity = '1';
+    }
+
+    function hideUploadPanel() {
+      panelVisible = false;
+      uploadPanel.classList.add('hidden-panel');
+      document.getElementById('topBar').style.opacity = '1';
+      document.getElementById('bottomBar').style.opacity = '1';
+      // Hide hint after a while
+      setTimeout(() => {
+        const hint = document.getElementById('hint');
+        if (hint) {
+          hint.style.transition = 'opacity 0.5s ease';
+          hint.style.opacity = '0';
+          setTimeout(() => { if (hint) hint.style.display = 'none'; }, 500);
+        }
+      }, 6000);
+    }
+
+    function showUploadPanel() {
+      panelVisible = true;
+      showLoading(false);
+      uploadPanel.classList.remove('hidden-panel');
+      document.getElementById('topBar').style.opacity = '0';
+      document.getElementById('bottomBar').style.opacity = '0';
+    }
+
+    function resetView() {
+      yaw = 0; pitch = 0;
+      fov = 75 * Math.PI / 180;
+      velYaw = 0; velPitch = 0;
+      autoRotate = true;
+      updateFovBadge();
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    // Button listeners
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      resetView();
+      showToast('View reset');
+    });
+    document.getElementById('fullscreenBtn').addEventListener('click', toggleFullscreen);
+    document.getElementById('newImageBtn').addEventListener('click', showUploadPanel);
+    document.getElementById('skipBtn').addEventListener('click', () => {
+      hideUploadPanel();
+      setImageInfo('Demo Scene', 2048, 1024);
+      showToast('Viewing demo scene — drag to look around!');
+    });
+    const sampleBtn = document.getElementById('sampleBtn');
+    if (sampleBtn) {
+      sampleBtn.addEventListener('click', () => {
+        loadImageAsTexture('sample.jpg', 'Modern Bedroom (360°)');
+      });
+    }
+
+    // ─── Render loop ─────────────────────────────────────────────────
+    function render() {
+      requestAnimationFrame(render);
+
+      if (!isDragging) {
+        yaw += velYaw;
+        pitch += velPitch;
+        velYaw *= 0.95;
+        velPitch *= 0.95;
+        if (Math.abs(velYaw) < 0.00001) velYaw = 0;
+        if (Math.abs(velPitch) < 0.00001) velPitch = 0;
+      }
+
+      if (autoRotate) yaw += 0.001;
+      pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+
+      if (!textureReady) return;
+
+      const aspect = canvas.width / canvas.height;
+      gl.uniform1f(uYaw, yaw);
+      gl.uniform1f(uPitch, pitch);
+      gl.uniform1f(uFov, fov);
+      gl.uniform1f(uAspect, aspect);
+      gl.uniform1i(uTex, 0);
+      gl.activeTexture(gl.TEXTURE_0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    // ─── Init ────────────────────────────────────────────────────────
+    createTexture();
+    const demoPano = generateDemoPanorama();
+    uploadTexture(demoPano);
+    render();
+  </script>
+</body>
+</html>
