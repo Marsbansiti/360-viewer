@@ -2,6 +2,7 @@
 
 > **Ultra-lightweight, hardware-accelerated WebGL 360° equirectangular panorama viewer with zero external 3D libraries, smooth inertia controls, and instant drag-and-drop support.**
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-success.svg?style=for-the-badge&logo=github)](https://marsbansiti.github.io/360-viewer/)
 [![WebGL](https://img.shields.io/badge/WebGL-1.0%20%2F%202.0-blue.svg)](https://www.khronos.org/webgl/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg)](LICENSE)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20External%203D%20Libs-purple.svg)](#technical-architecture)
